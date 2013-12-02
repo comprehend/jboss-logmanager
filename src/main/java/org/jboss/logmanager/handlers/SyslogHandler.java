@@ -302,7 +302,7 @@ public class SyslogHandler extends ExtHandler {
     public static final String DEFAULT_ENCODING = "UTF-8";
     public static final Facility DEFAULT_FACILITY = Facility.USER_LEVEL;
     public static final String NILVALUE_SP = "- ";
-    public static final String LOG4J_PATTERN_LAYOUT = "%-5p [%c] (%t) %s%E%n";
+    public static final String LOG4J_PATTERN_LAYOUT = "%-5p [%c] (%t) %m%n";
 
     static {
         try {
