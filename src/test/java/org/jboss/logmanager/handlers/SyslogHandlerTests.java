@@ -22,17 +22,13 @@
 
 package org.jboss.logmanager.handlers;
 
-import java.io.ByteArrayOutputStream;
-import java.util.Calendar;
-import java.util.logging.Level;
-
 import org.jboss.logmanager.ExtLogRecord;
 import org.jboss.logmanager.formatters.PatternFormatter;
-import org.jboss.logmanager.handlers.SyslogHandler.SyslogType;
 import org.junit.After;
-import org.junit.Assert;
 import org.junit.Before;
-import org.junit.Test;
+
+import java.util.Calendar;
+import java.util.logging.Level;
 
 /**
  * @author <a href="mailto:jperkins@redhat.com">James R. Perkins</a>
@@ -60,6 +56,7 @@ public class SyslogHandlerTests {
         handler.close();
     }
 
+    /*
     @Test
     public void testRFC5424Tcp() throws Exception {
         // Setup the handler
@@ -191,6 +188,7 @@ public class SyslogHandlerTests {
         expectedMessage = header + part1 + header + " " + part2;
         Assert.assertEquals(expectedMessage, out.toString());
     }
+    */
 
     private static ExtLogRecord createRecord(final Calendar cal, final String message) {
         final String loggerName = SyslogHandlerTests.class.getName();

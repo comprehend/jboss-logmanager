@@ -22,24 +22,24 @@
 
 package org.jboss.logmanager.handlers;
 
-import java.io.ByteArrayOutputStream;
-import java.io.Closeable;
-import java.io.Flushable;
-import java.io.IOException;
-import java.io.OutputStream;
+import org.apache.log4j.Logger;
+import org.apache.log4j.PatternLayout;
+import org.apache.log4j.net.SyslogAppender;
+import org.apache.log4j.spi.LoggingEvent;
+import org.jboss.logmanager.ExtHandler;
+import org.jboss.logmanager.ExtLogRecord;
+
+import java.io.*;
 import java.lang.management.ManagementFactory;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.charset.Charset;
 import java.text.DateFormatSymbols;
 import java.util.Calendar;
+import java.util.HashMap;
 import java.util.Locale;
-import java.util.logging.ErrorManager;
-import java.util.logging.Formatter;
+import java.util.Map;
 import java.util.logging.Level;
-
-import org.jboss.logmanager.ExtHandler;
-import org.jboss.logmanager.ExtLogRecord;
 
 /**
  * A syslog handler for logging to syslogd.
@@ -240,30 +240,30 @@ public class SyslogHandler extends ExtHandler {
      * and RFC-3164 (<a href="http://tools.ietf.org/html/rfc3164">http://tools.ietf.org/html/rfc3164</a>).
      */
     public static enum Facility {
-        KERNEL(0, "kernel messages"),
-        USER_LEVEL(1, "user-level messages"),
-        MAIL_SYSTEM(2, "mail system"),
-        SYSTEM_DAEMONS(3, "system daemons"),
-        SECURITY(4, "security/authorization messages"),
-        SYSLOGD(5, "messages generated internally by syslogd"),
-        LINE_PRINTER(6, "line printer subsystem"),
-        NETWORK_NEWS(7, "network news subsystem"),
-        UUCP(8, "UUCP subsystem"),
-        CLOCK_DAEMON(9, "clock daemon"),
-        SECURITY2(10, "security/authorization messages"),
-        FTP_DAEMON(11, "FTP daemon"),
+        KERNEL(0, "KERN"),
+        USER_LEVEL(1, "USER"),
+        MAIL_SYSTEM(2, "MAIL"),
+        SYSTEM_DAEMONS(3, "DAEMON"),
+        SECURITY(4, "AUTH"),
+        SYSLOGD(5, "SYSLOG"),
+        LINE_PRINTER(6, "LPR"),
+        NETWORK_NEWS(7, "NEWS"),
+        UUCP(8, "UUCP"),
+        CLOCK_DAEMON(9, "CRON"),
+        SECURITY2(10, "AUTHPRIV"),
+        FTP_DAEMON(11, "FTP"),
         NTP(12, "NTP subsystem"),
         LOG_AUDIT(13, "log audit"),
         LOG_ALERT(14, "log alert"),
         CLOCK_DAEMON2(15, "clock daemon (note 2)"),
-        LOCAL_USE_0(16, "local use 0  (local0)"),
-        LOCAL_USE_1(17, "local use 1  (local1)"),
-        LOCAL_USE_2(18, "local use 2  (local2)"),
-        LOCAL_USE_3(19, "local use 3  (local3)"),
-        LOCAL_USE_4(20, "local use 4  (local4)"),
-        LOCAL_USE_5(21, "local use 5  (local5)"),
-        LOCAL_USE_6(22, "local use 6  (local6)"),
-        LOCAL_USE_7(23, "local use 7  (local7)");
+        LOCAL_USE_0(16, "LOCAL0"),
+        LOCAL_USE_1(17, "LOCAL1"),
+        LOCAL_USE_2(18, "LOCAL2"),
+        LOCAL_USE_3(19, "LOCAL3"),
+        LOCAL_USE_4(20, "LOCAL4"),
+        LOCAL_USE_5(21, "LOCAL5"),
+        LOCAL_USE_6(22, "LOCAL6"),
+        LOCAL_USE_7(23, "LOCAL7");
 
         final int code;
         final String desc;
@@ -302,6 +302,7 @@ public class SyslogHandler extends ExtHandler {
     public static final String DEFAULT_ENCODING = "UTF-8";
     public static final Facility DEFAULT_FACILITY = Facility.USER_LEVEL;
     public static final String NILVALUE_SP = "- ";
+    public static final String LOG4J_PATTERN_LAYOUT = "%-5p [%c] (%t) %s%E%n";
 
     static {
         try {
@@ -312,6 +313,18 @@ public class SyslogHandler extends ExtHandler {
     }
 
     private static final byte[] UTF_8_BOM = {(byte) 0xef, (byte) 0xbb, (byte) 0xbf};
+    private static final Map<Level, org.apache.log4j.Level> levelMap = new HashMap<>();
+    static {
+        levelMap.put(Level.OFF, org.apache.log4j.Level.OFF);
+        levelMap.put(Level.SEVERE, org.apache.log4j.Level.ERROR);
+        levelMap.put(Level.WARNING, org.apache.log4j.Level.WARN);
+        levelMap.put(Level.INFO, org.apache.log4j.Level.INFO);
+        levelMap.put(Level.CONFIG, org.apache.log4j.Level.INFO);
+        levelMap.put(Level.FINE, org.apache.log4j.Level.DEBUG);
+        levelMap.put(Level.FINER, org.apache.log4j.Level.TRACE);
+        levelMap.put(Level.FINEST, org.apache.log4j.Level.TRACE);
+        levelMap.put(Level.ALL, org.apache.log4j.Level.ALL);
+    }
 
     private final Object outputLock = new Object();
     private InetAddress serverAddress;
@@ -331,6 +344,7 @@ public class SyslogHandler extends ExtHandler {
     private boolean escapeEnabled;
     private boolean truncate;
     private int maxLen;
+    private SyslogAppender appender;
 
     /**
      * The default class constructor.
@@ -501,69 +515,22 @@ public class SyslogHandler extends ExtHandler {
 
     @Override
     public final void doPublish(final ExtLogRecord record) {
+
         // Don't log empty messages
         if (record.getMessage() == null || record.getMessage().isEmpty()) {
             return;
         }
         synchronized (outputLock) {
-            init();
-            if (out == null) {
-                throw new IllegalStateException("The syslog handler has been closed.");
+            if (appender == null) {
+                log4jInit();
             }
-            try {
-                // Create the header
-                final byte[] header;
-                if (syslogType == SyslogType.RFC3164) {
-                    header = createRFC3164Header(record);
-                } else if (syslogType == SyslogType.RFC5424) {
-                    header = createRFC5424Header(record);
-                } else {
-                    throw new IllegalStateException("The syslog type of '" + syslogType + "' is invalid.");
-                }
-
-                // Trailer in bytes
-                final byte[] trailer = delimiter == null ? new byte[] {0x00} : delimiter.getBytes();
-
-                // Buffer currently only has the header
-                final int maxMsgLen = maxLen - (header.length + (useDelimiter ? trailer.length : 0));
-                // Can't write the message if the header and trailer are bigger than the allowed length
-                if (maxMsgLen < 1) {
-                    throw new IOException(String.format("The header and delimiter length, %d, is greater than the message length, %d, allows.",
-                            (header.length + (useDelimiter ? trailer.length : 0)), maxLen));
-                }
-
-                // Get the message
-                final Formatter formatter = getFormatter();
-                String logMsg;
-                if (formatter != null) {
-                    logMsg = formatter.format(record);
-                } else {
-                    logMsg = record.getFormattedMessage();
-                }
-                // Create a message buffer
-                final ByteOutputStream message = new ByteOutputStream();
-                // Write the message to the buffer, the offset is the next character available if there is overflow
-                int offset = message.writeString(logMsg, escapeEnabled, maxMsgLen);
-                sendMessage(header, message.toByteArray(), trailer);
-                // If not truncating, chunk the message and send separately
-                if (!truncate && offset > 0) {
-                    while (offset > 0) {
-                        // Reset the message
-                        message.reset();
-                        // Get the next part of the message to write
-                        logMsg = logMsg.substring(offset);
-                        if (logMsg.isEmpty()) {
-                            break;
-                        }
-                        offset = message.writeString(logMsg, escapeEnabled, maxMsgLen);
-                        sendMessage(header, message.toByteArray(), trailer);
-                    }
-                }
-            } catch (IOException e) {
-                reportError("Could not write to syslog", e, ErrorManager.WRITE_FAILURE);
-            }
+            LoggingEvent event = new LoggingEvent(record.getSourceClassName(),
+                    Logger.getLogger(record.getLoggerName()),
+                    levelMap.get(record.getLevel()),
+                    record.getFormattedMessage(),
+                    record.getThrown());
+            appender.append(event);
         }
-        super.doPublish(record);
     }
 
     /**
@@ -1073,6 +1040,15 @@ public class SyslogHandler extends ExtHandler {
                 throw new IllegalStateException("Could not set " + protocol + " output stream.", e);
             }
         }
+    }
+
+    private void log4jInit() {
+        appender = new SyslogAppender();
+        appender.setFacility(getFacility().desc);
+        appender.setLayout(new PatternLayout(getAppName() + ": " + LOG4J_PATTERN_LAYOUT));
+        appender.setHeader(true);
+        appender.setSyslogHost(getServerAddress().getHostAddress() + ":" + getPort());
+        Logger.getRootLogger().addAppender(appender);
     }
 
     protected int calculatePriority(final Level level, final Facility facility) {
